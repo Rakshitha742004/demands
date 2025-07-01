@@ -1,0 +1,222 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+  <meta charset="UTF-8" />
+  <title>Antrix Demand Comparison</title>
+  <style>
+    * { box-sizing: border-box; }
+    html, body { margin: 0; padding: 0; height: 100%; font-family: Arial, sans-serif; }
+    #container { display: flex; height: 100vh; }
+    .column { flex: 1; padding: 20px; overflow-y: auto; }
+    .left-column { background:lightgoldenrodyellow; border-right: 1px solid #ccc; }
+    h2 { text-align: center; }
+    ul { list-style: none; padding: 0; }
+    li a { display: block; padding: 10px; margin-bottom: 8px; background: #4c5baf; color: white; text-decoration: none; border-radius: 4px; text-align: center; }
+    li a:hover { background: #3a4b8a; }
+    .file-title { background: #ddd; padding: 8px; font-weight: bold; margin-top: 20px; border-radius: 4px; text-align: center; }
+    table { width: 100%; border-collapse: collapse; margin-top: 10px; }
+    th, td { border: 1px solid #aaa; padding: 6px; text-align: left; }
+    th { background: #4c5baf; color: white; }
+    .highlight-row { background-color: yellow !important; font-weight: bold; }
+    .search-bar { margin-top: 10px; display: flex; gap: 10px; align-items: center; flex-wrap: wrap; }
+    .search-bar select, .search-bar input, .search-bar button {
+      padding: 6px;
+      border-radius: 4px;
+      border: 1px solid #aaa;
+      font-size: 14px;
+    }
+    .search-bar button {
+      background-color: #4c5baf;
+      color: white;
+      cursor: pointer;
+    }
+    .search-bar button:hover {
+      background-color: #3a4b8a;
+    }
+    .red-row {
+  background-color: rgb(255, 60, 0) !important;
+  color: white;
+  font-weight: bold;
+}
+  </style>
+</head>
+<body>
+  <div id="container">
+    <div class="column left-column">
+      <h2>Demand Files</h2>
+      <input type="file" id="demand-upload" accept=".xlsx,.xls" multiple />
+      <ul id="demand-list"></ul>
+      <div id="demand-display"></div>
+    </div>
+
+    <div class="column right-column">
+      <h2>Main File</h2>
+      <input type="file" id="main-upload" accept=".xlsx,.xls" />
+      <div class="search-bar" id="search-controls" style="display:none;">
+        <label>Search Column:</label>
+        <select id="column-select"></select>
+        <input type="text" id="search-value" placeholder="Search value" />
+        <button onclick="searchInMainFile()">Search</button>
+      </div>
+      <div id="main-display"></div>
+    </div>
+  </div>
+
+  <script src="https://cdnjs.cloudflare.com/ajax/libs/xlsx/0.18.5/xlsx.full.min.js"></script>
+  <script>
+    const demandData = {};
+    let selectedDemand = '';
+    let mainData = null;
+
+    function normalize(text) {
+      return (text || '')
+        .toString()
+        .replace(/\u200B/g, '')
+        .replace(/[\s\-_.]/g, '')
+        .toLowerCase();
+    }
+
+    function parse(sheet, skipFirstRow = false) {
+      const raw = XLSX.utils.sheet_to_json(sheet, { header: 1, defval: "" });
+      if (raw.length === 0) return { header: [], rows: [] };
+
+      if (skipFirstRow && raw.length >= 2) {
+        return {
+          header: raw[1],
+          rows: raw.slice(2).filter(r => r.some(cell => cell !== ""))
+        };
+      } else {
+        return {
+          header: raw[0],
+          rows: raw.slice(1).filter(r => r.some(cell => cell !== ""))
+        };
+      }
+    }
+
+    function renderTable(title, header, rows, container, highlightRows = new Set(), redRowIndex = -1) {
+  let html = `<div class="file-title">${title}</div><table><thead><tr>`;
+  header.forEach(h => html += `<th>${h}</th>`);
+  html += '</tr></thead><tbody>';
+
+  rows.forEach((row, i) => {
+    const isHighlighted = highlightRows.has(i);
+    const isRed = i === redRowIndex;
+    const extraClass = isRed ? 'red-row' : (isHighlighted ? 'highlight-row' : '');
+    html += `<tr class="${extraClass}">`;
+
+    header.forEach((_, colIndex) => {
+      html += `<td>${row[colIndex] || ""}</td>`;
+    });
+    html += `</tr>`;
+  });
+
+  html += '</tbody></table>';
+  container.innerHTML = html;
+}
+
+
+    document.getElementById("demand-upload").addEventListener("change", event => {
+      const list = document.getElementById("demand-list");
+      list.innerHTML = '';
+      for (const file of event.target.files) {
+        const reader = new FileReader();
+        reader.onload = e => {
+          const data = new Uint8Array(e.target.result);
+          const workbook = XLSX.read(data, { type: "array" });
+          const sheet = workbook.Sheets[workbook.SheetNames[0]];
+          const parsed = parse(sheet, true); // Demand: skip first row
+
+          demandData[file.name] = parsed;
+
+          const li = document.createElement("li");
+          li.innerHTML = `<a href="#" onclick="selectDemand('${file.name}')">${file.name}</a>`;
+          list.appendChild(li);
+        };
+        reader.readAsArrayBuffer(file);
+      }
+    });
+
+    window.selectDemand = function(filename) {
+      selectedDemand = filename;
+      const { header, rows } = demandData[filename];
+      renderTable(filename, header, rows, document.getElementById("demand-display"));
+      if (mainData) highlightMainFile();
+    };
+
+    document.getElementById("main-upload").addEventListener("change", event => {
+      const file = event.target.files[0];
+      const reader = new FileReader();
+      reader.onload = e => {
+        const data = new Uint8Array(e.target.result);
+        const workbook = XLSX.read(data, { type: "array" });
+        const sheet = workbook.Sheets[workbook.SheetNames[0]];
+        mainData = parse(sheet, false); // Main file: show full from row 1
+
+        // Populate search dropdown
+        const select = document.getElementById("column-select");
+        select.innerHTML = '';
+        mainData.header.forEach((h, i) => {
+          const option = document.createElement("option");
+          option.value = i;
+          option.textContent = h;
+          select.appendChild(option);
+        });
+
+        document.getElementById("search-controls").style.display = "flex";
+
+        if (selectedDemand) highlightMainFile();
+        else renderTable("Main File", mainData.header, mainData.rows, document.getElementById("main-display"));
+      };
+      reader.readAsArrayBuffer(file);
+    });
+
+    function highlightMainFile() {
+  const { header: mainHeader, rows: mainRows } = mainData;
+  const { header: demandHeader, rows: demandRows } = demandData[selectedDemand];
+
+  const docIdxMain = mainHeader.findIndex(h => normalize(h).includes("invoiceno") || normalize(h).includes("documentno"));
+  const docIdxDemand = demandHeader.findIndex(h => normalize(h).includes("invoiceno") || normalize(h).includes("documentno"));
+
+  if (docIdxMain === -1 || docIdxDemand === -1) {
+    alert("Invoice No / Document No column not found in one of the files.");
+    return;
+  }
+
+  const demandValues = new Set(demandRows.map(r => normalize(r[docIdxDemand])));
+  const highlightSet = new Set();
+  let redRowIndex = -1;
+
+  mainRows.forEach((row, i) => {
+    const value = normalize(row[docIdxMain]);
+    if (demandValues.has(value)) {
+      highlightSet.add(i);
+    }
+
+    // Check for hardcoded red row (example Invoice No: 400204976)
+    if (value === "400204976") {
+      redRowIndex = i;
+    }
+  });
+
+  renderTable("Main File", mainHeader, mainRows, document.getElementById("main-display"), highlightSet, redRowIndex);
+}
+
+
+
+    window.searchInMainFile = function() {
+      const colIndex = parseInt(document.getElementById("column-select").value);
+      const searchVal = normalize(document.getElementById("search-value").value);
+
+      if (!mainData || isNaN(colIndex) || !searchVal) {
+        alert("Please select a column and enter a search value.");
+        return;
+      }
+
+    
+      const filteredRows = mainData.rows.filter(row => normalize(row[colIndex]) === searchVal);
+
+      renderTable("Main File (Filtered Search Result)", mainData.header, filteredRows, document.getElementById("main-display"));
+    };
+  </script>
+</body>
+</html>
