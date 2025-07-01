@@ -18,6 +18,26 @@
     th, td { border: 1px solid #aaa; padding: 6px; text-align: left; }
     th { background: #4c5baf; color: white; }
     .highlight-row { background-color: yellow !important; font-weight: bold; }
+    .search-bar { margin-top: 10px; display: flex; gap: 10px; align-items: center; flex-wrap: wrap; }
+    .search-bar select, .search-bar input, .search-bar button {
+      padding: 6px;
+      border-radius: 4px;
+      border: 1px solid #aaa;
+      font-size: 14px;
+    }
+    .search-bar button {
+      background-color: #4c5baf;
+      color: white;
+      cursor: pointer;
+    }
+    .search-bar button:hover {
+      background-color: #3a4b8a;
+    }
+    .red-row {
+  background-color: rgb(255, 60, 0) !important;
+  color: white;
+  font-weight: bold;
+}
   </style>
 </head>
 <body>
@@ -32,6 +52,12 @@
     <div class="column right-column">
       <h2>Main File</h2>
       <input type="file" id="main-upload" accept=".xlsx,.xls" />
+      <div class="search-bar" id="search-controls" style="display:none;">
+        <label>Search Column:</label>
+        <select id="column-select"></select>
+        <input type="text" id="search-value" placeholder="Search value" />
+        <button onclick="searchInMainFile()">Search</button>
+      </div>
       <div id="main-display"></div>
     </div>
   </div>
@@ -45,8 +71,8 @@
     function normalize(text) {
       return (text || '')
         .toString()
-        .replace(/\u200B/g, '')       
-        .replace(/[\s\-_.]/g, '')    
+        .replace(/\u200B/g, '')
+        .replace(/[\s\-_.]/g, '')
         .toLowerCase();
     }
 
@@ -67,22 +93,27 @@
       }
     }
 
-    function renderTable(title, header, rows, container, highlightRows = new Set()) {
-      let html = `<div class="file-title">${title}</div><table><thead><tr>`;
-      header.forEach(h => html += `<th>${h}</th>`);
-      html += '</tr></thead><tbody>';
+    function renderTable(title, header, rows, container, highlightRows = new Set(), redRowIndex = -1) {
+  let html = `<div class="file-title">${title}</div><table><thead><tr>`;
+  header.forEach(h => html += `<th>${h}</th>`);
+  html += '</tr></thead><tbody>';
 
-      rows.forEach((row, i) => {
-        html += `<tr class="${highlightRows.has(i) ? 'highlight-row' : ''}">`;
-        header.forEach((_, colIndex) => {
-          html += `<td>${row[colIndex] || ""}</td>`;
-        });
-        html += `</tr>`;
-      });
+  rows.forEach((row, i) => {
+    const isHighlighted = highlightRows.has(i);
+    const isRed = i === redRowIndex;
+    const extraClass = isRed ? 'red-row' : (isHighlighted ? 'highlight-row' : '');
+    html += `<tr class="${extraClass}">`;
 
-      html += '</tbody></table>';
-      container.innerHTML = html;
-    }
+    header.forEach((_, colIndex) => {
+      html += `<td>${row[colIndex] || ""}</td>`;
+    });
+    html += `</tr>`;
+  });
+
+  html += '</tbody></table>';
+  container.innerHTML = html;
+}
+
 
     document.getElementById("demand-upload").addEventListener("change", event => {
       const list = document.getElementById("demand-list");
@@ -121,6 +152,18 @@
         const sheet = workbook.Sheets[workbook.SheetNames[0]];
         mainData = parse(sheet, false); // Main file: show full from row 1
 
+        // Populate search dropdown
+        const select = document.getElementById("column-select");
+        select.innerHTML = '';
+        mainData.header.forEach((h, i) => {
+          const option = document.createElement("option");
+          option.value = i;
+          option.textContent = h;
+          select.appendChild(option);
+        });
+
+        document.getElementById("search-controls").style.display = "flex";
+
         if (selectedDemand) highlightMainFile();
         else renderTable("Main File", mainData.header, mainData.rows, document.getElementById("main-display"));
       };
@@ -128,29 +171,52 @@
     });
 
     function highlightMainFile() {
-      const { header: mainHeader, rows: mainRows } = mainData;
-      const { header: demandHeader, rows: demandRows } = demandData[selectedDemand];
+  const { header: mainHeader, rows: mainRows } = mainData;
+  const { header: demandHeader, rows: demandRows } = demandData[selectedDemand];
 
-      const docIdxMain = mainHeader.findIndex(h => normalize(h).includes("invoiceno") || normalize(h).includes("documentno"));
-      const docIdxDemand = demandHeader.findIndex(h => normalize(h).includes("invoiceno") || normalize(h).includes("documentno"));
+  const docIdxMain = mainHeader.findIndex(h => normalize(h).includes("invoiceno") || normalize(h).includes("documentno"));
+  const docIdxDemand = demandHeader.findIndex(h => normalize(h).includes("invoiceno") || normalize(h).includes("documentno"));
 
-      if (docIdxMain === -1 || docIdxDemand === -1) {
-        alert("Invoice No / Document No column not found in one of the files.");
+  if (docIdxMain === -1 || docIdxDemand === -1) {
+    alert("Invoice No / Document No column not found in one of the files.");
+    return;
+  }
+
+  const demandValues = new Set(demandRows.map(r => normalize(r[docIdxDemand])));
+  const highlightSet = new Set();
+  let redRowIndex = -1;
+
+  mainRows.forEach((row, i) => {
+    const value = normalize(row[docIdxMain]);
+    if (demandValues.has(value)) {
+      highlightSet.add(i);
+    }
+
+    // Check for hardcoded red row (example Invoice No: 400204976)
+    if (value === "400204976") {
+      redRowIndex = i;
+    }
+  });
+
+  renderTable("Main File", mainHeader, mainRows, document.getElementById("main-display"), highlightSet, redRowIndex);
+}
+
+
+
+    window.searchInMainFile = function() {
+      const colIndex = parseInt(document.getElementById("column-select").value);
+      const searchVal = normalize(document.getElementById("search-value").value);
+
+      if (!mainData || isNaN(colIndex) || !searchVal) {
+        alert("Please select a column and enter a search value.");
         return;
       }
 
-      const demandValues = new Set(demandRows.map(r => normalize(r[docIdxDemand])));
-      const highlightSet = new Set();
+    
+      const filteredRows = mainData.rows.filter(row => normalize(row[colIndex]) === searchVal);
 
-      mainRows.forEach((row, i) => {
-        const value = normalize(row[docIdxMain]);
-        if (demandValues.has(value)) {
-          highlightSet.add(i);
-        }
-      });
-
-      renderTable("Main File", mainHeader, mainRows, document.getElementById("main-display"), highlightSet);
-    }
+      renderTable("Main File (Filtered Search Result)", mainData.header, filteredRows, document.getElementById("main-display"));
+    };
   </script>
 </body>
 </html>
